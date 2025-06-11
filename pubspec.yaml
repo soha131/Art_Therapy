@@ -1,0 +1,45 @@
+name: arttherapy
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.0-171.0.dev
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: ^0.20.2
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  cupertino_icons: ^1.0.8
+  file_picker:
+  image_picker:
+  analyzer:
+  bloc: ^9.0.0
+  flutter_bloc: ^9.1.0
+  http:
+  uuid:
+  nb_utils: ^7.1.3
+  image:
+  flutter_image_compress:
+dev_dependencies:
+  hive_generator: ^2.0.0
+  build_runner: ^2.4.7
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/darker_blue_image.png
+    - assets/darker_image.png
+    - assets/logo.png
+    - assets/lang/en.json
+    - assets/lang/ar.json
