@@ -1,0 +1,3460 @@
+﻿===== E:\arttherapy\lib\cubit\Art_cubit.dart =====
+import 'dart:io';
+
+import 'package:bloc/bloc.dart';
+
+import '../models/Art_model.dart';
+import '../service.dart';
+import 'Art_state.dart';
+
+class ArtCubit extends Cubit<ArtTherapyState> {
+  ArtCubit() : super(ArtTherapyInitial());
+  Art(File file) async {
+    try {
+      emit(ArtTherapyLoading());
+      ArtPrediction? result = await ApiService().fetchDataFromApi(file);
+
+      emit(ArtTherapySuccess(result!));
+    } catch (e) {
+      emit(ArtTherapyError("Error: $e"));
+    }
+    return null;
+  }
+}
+===== E:\arttherapy\lib\cubit\Art_state.dart =====
+
+import '../models/Art_model.dart';
+
+abstract class ArtTherapyState {}
+
+class  ArtTherapyInitial extends ArtTherapyState {}
+
+class  ArtTherapyLoading extends ArtTherapyState {}
+
+class ArtTherapySuccess extends ArtTherapyState {
+  final ArtPrediction prediction;
+  ArtTherapySuccess(this.prediction);
+}
+
+class ArtTherapyError extends ArtTherapyState {
+  final String message;
+  ArtTherapyError(this.message);
+}
+===== E:\arttherapy\lib\cubit\auth_cubit.dart =====
+import 'dart:convert';
+import 'dart:io';
+import 'package:bloc/bloc.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/http.dart';
+import 'package:image/image.dart' as img;
+import 'package:nb_utils/nb_utils.dart' show Fluttertoast;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../models/result_model.dart';
+import '../models/user_model.dart';
+import 'auth_state.dart';
+import 'package:path/path.dart' as path;
+import 'package:http_parser/http_parser.dart';
+
+class AuthCubit extends Cubit<AuthStates> {
+  AuthCubit() : super(AuthIntialState());
+  Future<void> signup({
+    required String email,
+    required String password,
+    required String confirmPassword,
+    required String name,
+    required String relation,
+    required String age,
+    required String gender,
+    required BuildContext context,
+  }) async {
+    emit(RegisterLoadingState());
+
+    if (name.isEmpty || email.isEmpty || password.isEmpty || confirmPassword.isEmpty || relation.isEmpty || age.isEmpty ) {
+      emit(FailedRegisterState(message: "Please fill in all the fields."));
+      return;
+    }
+
+    if (password != confirmPassword) {
+      emit(FailedRegisterState(message: "Passwords do not match."));
+      return;
+    }
+    Map<String, dynamic> body = {
+      'email': email,
+      'password': password,
+      "name": name,
+      'relation': relation,
+      'age': age,
+      "confirmPassword": password,
+      "gender": gender,
+    };
+    try {
+      http.Response response = await http.post(
+        Uri.parse("http://192.168.100.3:3400/auth/signup"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode(body),
+      );
+
+      final Map<String, dynamic> data = jsonDecode(response.body);
+      print("Response: ${response.body}");
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        emit(RegisterSuccessState());
+
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(data['message'] ?? 'Registration successful!'),
+            ),
+          );
+        }
+      } else {
+        emit(
+          FailedRegisterState(
+            message: data['message'] ?? 'Registration failed!',
+          ),
+        );
+
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(data['message'] ?? 'Something went wrong'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          print(data['message'] ?? 'Something went wrong');
+
+
+        }
+      }
+    } catch (e) {
+      emit(FailedRegisterState(message: "Error: $e"));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Network error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+
+      }
+    }
+  }
+  Future<void> verifyOtp(String otp,String email) async {
+    if (otp.isEmpty || otp.length != 4) {
+      emit(AuthErrorState("Please enter a valid 4-digit OTP"));
+      return;
+    }
+    emit(AuthLoadingState());
+    Map<String, dynamic> body = {
+      'otp': otp,
+      'email': email,
+    };
+    try {
+      final Uri url = Uri.parse("http://192.168.100.3:3400/auth/confirm-email");
+      final response = await http.patch(url,body:jsonEncode(body), headers: {"Content-Type": "application/json"},
+    );
+      final Map<String, dynamic> data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        emit(AuthSuccessState());
+      } else {
+        emit(AuthErrorState(data['message'] ?? 'Verification failed'));
+
+      }
+    } catch (e) {
+      emit(AuthErrorState("An error occurred: $e"));
+
+    }
+  }
+  Future<void> login({
+    required String email,
+    required String password,
+    required BuildContext context,
+  }) async {
+    emit(LoginLoadingState());
+    Map<String, String> body = {'email': email, 'password': password};
+    try {
+      Response response = await http.post(
+        Uri.parse("http://192.168.100.3:3400/auth/login"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode(body),
+      );
+      final Map<String, dynamic> data = json.decode(response.body);
+
+      if (response.statusCode == 200) {
+        String? token = data['data']['access_token'];
+        if (token != null) {
+          SharedPreferences prefs = await SharedPreferences.getInstance();
+          await prefs.setString('access_token', token);
+          emit(LoginSuccessState());
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(data['message'] ?? 'Login successful')),
+          );
+
+        }
+      } else {
+        emit(FailedLoginState(message: data['message'] ?? 'An error occurred'));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['message'] ?? 'Login failed'),
+            backgroundColor: Colors.red,
+          ),
+        );
+
+      }
+    } catch (error) {
+      emit(FailedLoginState(message: error.toString()));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Network error: ${error.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> fetchUserData() async {
+    emit(UserLoading());
+    final prefs = await SharedPreferences.getInstance();
+    final backendToken = prefs.getString('access_token');
+    if (backendToken == null || backendToken.isEmpty) {
+      emit(UserError('No token found. Please log in again.'));
+      return;
+    }
+    const String apiUrl = 'http://192.168.100.3:3400/user/profile';
+    try {
+      final response = await http.get(
+        Uri.parse(apiUrl),
+        headers: {
+          'Authorization': 'Bearer $backendToken',
+        },
+      );
+      print("Response: ${response.body}");
+
+
+      if (response.statusCode == 200) {
+        final jsonData = json.decode(response.body);
+        if (jsonData['data'] == null) {
+          emit(UserError('User data not found in the response'));
+          return;
+        }
+        UserModel user = UserModel.fromJson(jsonData['data']);
+        emit(UserLoaded(user));
+      } else if (response.statusCode == 401) {
+        emit(UserError('Unauthorized. Please log in again.'));
+      } else {
+        emit(UserError('Error: ${response.reasonPhrase}'));
+      }
+    } catch (e) {
+      emit(UserError('Fetch error: $e'));
+    }
+  }
+
+  Future<void> updateUserData({
+    required String name,
+    required String age,
+    required String relation,
+  }) async {
+    emit(UserLoading());
+
+    try {
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      String? backendToken = prefs.getString('access_token');
+
+      if (backendToken == null || backendToken.isEmpty) {
+        emit(UserError('No token found. Please log in again.'));
+        return;
+      }
+
+      final url = Uri.parse('http://192.168.100.3:3400/user');
+
+      final response = await http.patch(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $backendToken',
+        },
+        body: json.encode({
+          'name': name,
+          'age': age,
+          'relation': relation,
+        }),
+      );
+
+      final jsonResponse = json.decode(response.body);
+
+      if ((response.statusCode == 200 || response.statusCode == 201) && jsonResponse['success'] == true) {
+        try {
+          final updatedUser = UserModel.fromJson(jsonResponse['data']);
+          emit(UserUpdated(updatedUser));
+        } catch (e) {
+          emit(UserError("Failed to parse user data: $e"));
+        }
+      } else {
+        final errorMessage = jsonResponse['message'] ?? 'Unknown error';
+        emit(UserError("Update failed: $errorMessage"));
+      }
+    } catch (e) {
+      emit(UserError("Failed to update profile: ${e.toString()}"));
+    }
+  }
+
+  Future<void> resetPassword({
+    required String email,
+    required String password,
+    required BuildContext context,
+  }) async {
+    emit(AuthLoadingState());
+
+    final Uri url = Uri.parse(
+      "http://192.168.100.3:3400/auth/reset-password"
+    );
+    try {
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({"email": email,"newPassword": password,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        Fluttertoast.showToast(msg: "Password reset successfully!");
+        emit(AuthSuccessState());
+
+      } else {
+        final errorMessage = json.decode(response.body)['message'];
+        Fluttertoast.showToast(msg: "Error: $errorMessage");
+
+        emit(AuthErrorState(errorMessage));
+      }
+    } catch (e) {
+      Fluttertoast.showToast(msg: "Something went wrong. Please try again.");
+      emit(AuthErrorState(e.toString()));
+    }
+  }
+  Future<File> compressImage(File profilePicture) async {
+    final compressed = await FlutterImageCompress.compressAndGetFile(
+      profilePicture.absolute.path,
+      '${profilePicture.path}_compressed.jpg',
+      quality: 70,
+    );
+
+    return File(compressed!.path);
+  }
+
+  Future<File> convertHeicToJpg(File heicFile) async {
+    final newPath = heicFile.path.replaceAll(RegExp(r'\.heic$'), '.jpg');
+    final result = await FlutterImageCompress.compressAndGetFile(
+      heicFile.absolute.path,
+      newPath,
+      format: CompressFormat.jpeg,
+      quality: 80,
+    );
+
+    return File(result!.path);
+  }
+
+  Future<File> removeExif(File profilePicture) async {
+    final image = img.decodeImage(await profilePicture.readAsBytes());
+    final stripped = File('${profilePicture.path}_stripped.jpg')
+      ..writeAsBytesSync(img.encodeJpg(image!));
+
+    return stripped;
+  }
+
+  Future<void> saveResult({
+    required String diseaseName,
+    File? profilePicture,
+  }) async {
+    emit(ResultLoading());
+
+    try {
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      String? backendToken = prefs.getString('access_token');
+
+      if (backendToken == null || backendToken.isEmpty) {
+        emit(ResultError('No token found. Please log in again.'));
+        return;
+      }
+
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('http://192.168.100.3:3400/result'),
+      );
+
+      request.headers.addAll({
+        'Authorization': 'Bearer $backendToken',
+      });
+
+      request.fields['disease_name'] = diseaseName;
+
+      if (profilePicture != null) {
+        File processedImage = profilePicture;
+        String originalExtension = path.extension(profilePicture.path).toLowerCase();
+
+        if (originalExtension == '.heic') {
+          processedImage = await convertHeicToJpg(profilePicture);
+        }
+
+        processedImage = await compressImage(processedImage);
+        processedImage = await removeExif(processedImage);
+
+        String finalExtension = path.extension(processedImage.path).toLowerCase();
+        String mimeType = 'image/jpeg';
+        if (finalExtension == '.png') mimeType = 'image/png';
+        else if (finalExtension == '.webp') mimeType = 'image/webp';
+
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'image',
+            processedImage.path,
+            contentType: MediaType.parse(mimeType),
+          ),
+        );
+      }
+
+
+      var response = await request.send();
+      var responseBody = await response.stream.bytesToString();
+
+      if (response.statusCode == 200) {
+        var jsonResponse = json.decode(responseBody);
+
+        emit(ResultCreated(ResultModel.fromJson(jsonResponse['data'])));
+      } else {
+
+        String errorMessage = "Something went wrong.";
+        try {
+          var errorJson = json.decode(responseBody);
+          errorMessage = errorJson['message'] ;
+        } catch (_) {
+          errorMessage = responseBody;
+        }
+
+        emit(ResultError("Upload failed: $errorMessage"));
+      }
+    } catch (e) {
+      emit(ResultError("An error occurred: ${e.toString()}"));
+    }
+  }
+  Future<void> fetchAllResults() async {
+    emit(ResultLoading());
+    try {
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      String? backendToken = prefs.getString('access_token');
+
+      if (backendToken == null || backendToken.isEmpty) {
+        emit(ResultError('No token found. Please log in again.'));
+        return;
+      }
+
+      final response = await http.get(
+        Uri.parse('http://192.168.100.3:3400/result/user'),
+        headers: {
+          'Authorization': 'Bearer $backendToken',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final jsonData = json.decode(response.body);
+
+        final List<dynamic> resultsList = jsonData['data']['result'];
+
+        final results = resultsList
+            .map((item) => ResultModel.fromJson(item))
+            .toList();
+
+        emit(ResultLoaded(results));
+      } else {
+        emit(ResultError('Failed to fetch results: ${response.statusCode}'));
+      }
+    } catch (e) {
+      emit(ResultError('Error fetching results: ${e.toString()}'));
+    }
+  }
+
+
+}
+===== E:\arttherapy\lib\cubit\auth_state.dart =====
+import '../models/result_model.dart';
+import '../models/user_model.dart';
+
+abstract class AuthStates {
+  get accommodations => null;
+}
+
+class AuthIntialState extends AuthStates {}
+
+class RegisterLoadingState extends AuthStates {}
+
+class RegisterSuccessState extends AuthStates {}
+
+class FailedRegisterState extends AuthStates {
+  String message;
+  FailedRegisterState({required this.message});
+}
+//////////////////////////////////////
+
+class LoginLoadingState extends AuthStates {}
+
+class LoginSuccessState extends AuthStates {}
+
+class FailedLoginState extends AuthStates {
+  String message;
+  FailedLoginState({required this.message});
+}
+//////////////////////////////////////
+
+class ForgetpassLoadingState extends AuthStates {}
+
+class ForgetpassSuccessState extends AuthStates {}
+
+class FailedForgetpassState extends AuthStates {
+  String message;
+  FailedForgetpassState({required this.message});
+}
+//////////////////////////////////////
+
+class UserInitial extends AuthStates {}
+
+class UserLoading extends AuthStates {}
+
+class UserLoaded extends AuthStates {
+  final UserModel user;
+  UserLoaded(this.user);
+}
+
+class UserError extends AuthStates {
+  final String message;
+  UserError(this.message);
+  List<Object?> get props => [message];
+}
+
+class UserUpdated extends AuthStates {
+  final UserModel user;
+  UserUpdated(this.user);
+}
+
+//////////////////////////////////////
+
+class AuthInitialState extends AuthStates {}
+
+class AuthLoadingState extends AuthStates {}
+
+class AuthSuccessState extends AuthStates {}
+
+class AuthErrorState extends AuthStates {
+  final String error;
+  AuthErrorState(this.error);
+}
+
+class ResendOtpSuccessState extends AuthStates {
+  final String message;
+  ResendOtpSuccessState(this.message);
+}
+//////////////////////////////////////
+
+
+class ResultLoading extends AuthStates {}
+
+class ResultLoaded extends AuthStates {
+  final List<ResultModel> results;
+
+  ResultLoaded(this.results);
+}
+
+
+class ResultError extends AuthStates {
+  final String message;
+  ResultError(this.message);
+  List<Object?> get props => [message];
+}
+
+class ResultCreated extends AuthStates {
+  final ResultModel result;
+  ResultCreated(this.result);
+}
+===== E:\arttherapy\lib\hisrory.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:intl/intl.dart';
+import 'cubit/auth_cubit.dart';
+import 'cubit/auth_state.dart';
+import 'models/local_language.dart';
+import 'models/result_model.dart';
+import 'upload_file.dart';
+
+class HistoryScreen extends StatefulWidget {
+  const HistoryScreen({super.key});
+
+  @override
+  _HistoryScreenState createState() => _HistoryScreenState();
+}
+
+class _HistoryScreenState extends State<HistoryScreen> {
+
+  @override
+  void initState() {
+    super.initState();
+    context.read<AuthCubit>().fetchAllResults();
+
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    double screenWidth = MediaQuery.of(context).size.width;
+    double screenHeight = MediaQuery.of(context).size.height;
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return  Scaffold(
+        backgroundColor: Colors.white,
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildBackButton(context),
+              _buildTitle(
+                AppLocalizations.of(context).translate("History"),
+                screenWidth,
+              ),
+              _buildDivider(screenWidth),
+              Expanded(
+                child: BlocBuilder<AuthCubit, AuthStates>(
+                  builder: (context, state) {
+                    if (state is ResultLoading) {
+                      return Center(child: CircularProgressIndicator());
+                    } else if (state is ResultLoaded) {
+                      if (state.results.isEmpty) {
+                        return Center(
+                          child: Text(AppLocalizations.of(context).translate("No history available.")),
+                        );
+                      }
+
+                      return _buildHistoryGrid(screenWidth, screenHeight,context, state.results);
+                    } else if (state is ResultError) {
+                      return Center(child: Text(state.message));
+                    }
+                    return Container();
+                  },
+                ),
+              ),
+
+            ],
+          ),
+        ),
+        bottomNavigationBar: _buildCustomBottomNavBar(
+          context,
+          activeTab: AppLocalizations.of(context).translate("history"),
+        ),
+      );
+  }
+
+  Widget _buildBackButton(BuildContext context) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 16, top: 20),
+        child: IconButton(
+          icon: Icon(
+            isArabic ? Icons.arrow_forward : Icons.arrow_back,
+            color: Color(0xff09122C),
+          ),
+          iconSize: 30,
+          onPressed: () {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => UploadFileScreen()),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTitle(String title, double screenWidth) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.08),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontSize: screenWidth * 0.06,
+          fontWeight: FontWeight.bold,
+          color: const Color(0xff09122C),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDivider(double screenWidth) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.05),
+      child: const Divider(color: Colors.black26, thickness: 1),
+    );
+  }
+
+  Widget _buildHistoryGrid(
+    double screenWidth,
+    double screenHeight,
+      BuildContext context,
+
+      List<ResultModel> results,
+  ) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.02),
+      child: GridView.builder(
+        padding: EdgeInsets.only(bottom: screenHeight * 0.08),
+        itemCount: results.length,
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: screenWidth * 0.09,
+          mainAxisSpacing: screenHeight * 0.02,
+          childAspectRatio: 1.1,
+        ),
+        itemBuilder: (context, index) {
+          final item = results[index];
+          return GestureDetector(
+            onTap: () {},
+            child: Center(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    height: screenHeight * 0.12,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(10),
+                      image: DecorationImage(
+                        image:  NetworkImage(item.imageUrl),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: screenHeight * 0.005),
+                  Center(
+                    child: Text(
+                      item.diseaseName??"",
+                      style: TextStyle(
+                        fontSize: screenWidth * 0.04,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  Center(
+                    child: Text(
+                      item.createdAt != null
+                          ? DateFormat('yyyy-MM-dd').format(DateTime.parse(item.createdAt!))
+                          : "",
+                      style: TextStyle(
+                        fontSize: screenWidth * 0.04,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildCustomBottomNavBar(
+    BuildContext context, {
+    required String activeTab,
+  }) {
+    double screenWidth = MediaQuery.of(context).size.width;
+    double screenHeight = MediaQuery.of(context).size.height;
+
+    return Container(
+      height: screenHeight * 0.10,
+      decoration: const BoxDecoration(color: Color(0xff09122C)),
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.1),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _buildNavIcon(
+              context,
+              Icons.bookmark,
+              "history",
+              activeTab,
+              screenWidth,
+            ),
+            _buildNavIcon(
+              context,
+              Icons.person,
+              "settings",
+              activeTab,
+              screenWidth,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavIcon(
+    BuildContext context,
+    IconData icon,
+    String tabName,
+    String activeTab,
+    double screenWidth,
+  ) {
+    return CircleAvatar(
+      backgroundColor: activeTab == tabName ? Colors.yellow : Color(0xff09122C),
+      radius: screenWidth * .08,
+      child: IconButton(
+        icon: Icon(
+          icon,
+          color: activeTab == tabName ? Color(0xff09122C) : Colors.grey,
+          size: screenWidth * 0.07,
+        ),
+        onPressed: () {
+          if (activeTab != tabName) {
+            Navigator.pushReplacementNamed(
+              context,
+              tabName == "history" ? "History" : "Setting",
+            );
+          }
+        },
+      ),
+    );
+  }
+}
+===== E:\arttherapy\lib\login.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'cubit/auth_cubit.dart';
+import 'cubit/auth_state.dart';
+import 'models/local_language.dart';
+import 'rest_password.dart';
+import 'upload_file.dart';
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isPasswordVisible = false;
+  final formkey = GlobalKey<FormState>();
+
+  @override
+  Widget build(BuildContext context) {
+    double screenWidth = MediaQuery.of(context).size.width;
+    double screenHeight = MediaQuery.of(context).size.height;
+    var lang = AppLocalizations.of(context);
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return BlocConsumer<AuthCubit, AuthStates>(
+      listener: (context, state) {
+        if (state is LoginSuccessState) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => UploadFileScreen()),
+          );
+        }
+      },
+      builder: (context, state) {
+        return Directionality(
+          textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+          child: Scaffold(
+            body: Stack(
+              children: [
+                Container(
+                  width: double.infinity,
+                  height: double.infinity,
+                  decoration: const BoxDecoration(
+                    image: DecorationImage(
+                      image: AssetImage("assets/darker_blue_image.png"),
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: screenHeight * 0.12,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Image.asset(
+                      "assets/logo.png",
+                      width: screenWidth * 0.2,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: screenHeight * 0.3,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: screenWidth * 0.08,
+                    ),
+                    height: screenHeight * 0.7,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.only(
+                        topRight: Radius.circular(screenWidth * 0.15),
+                      ),
+                    ),
+                    child: Form(
+                      key: formkey,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Padding(
+                            padding: EdgeInsets.only(
+                              bottom: screenHeight * 0.03,
+                            ),
+                            child: Text(
+                              lang.translate("login"),
+                              style: TextStyle(
+                                fontSize: 30,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xff09122C),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          _buildLabel(lang.translate("EMAIL"), screenWidth),
+                          _buildTextField(
+                            hintText: lang.translate("*****@gmail.com"),
+                            icon: Icons.email,
+                            screenWidth: screenWidth,
+                            controller: _emailController,
+                          ),
+                          const SizedBox(height: 15),
+                          _buildLabel(lang.translate("PASSWORD"), screenWidth),
+                          _buildTextField(
+                            hintText: "******",
+                            icon: Icons.lock,
+                            screenWidth: screenWidth,
+                            isPassword: true,
+                            controller: _passwordController,
+                          ),
+                          const SizedBox(height: 20),
+                          SizedBox(
+                            width: double.infinity,
+                            height: screenHeight * 0.06,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Color(0xff09122C),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    screenWidth * 0.03,
+                                  ),
+                                ),
+                              ),
+                              onPressed: () {
+                                if (formkey.currentState!.validate()) {
+                                  BlocProvider.of<AuthCubit>(context).login(
+                                    email: _emailController.text,
+                                    password: _passwordController.text,
+                                    context: context,
+                                  );
+                                }
+                              },
+                              child: Text(
+                                lang.translate("Log in"),
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ResetPasswordScreen(),
+                                ),
+                              );
+                            },
+                            child: Text(
+                              lang.translate("Forgot Password?"),
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pushNamed(context, "Signup");
+                            },
+                            child: Text(
+                              lang.translate("Signup!"),
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLabel(String text, double screenWidth) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return Padding(
+      padding: EdgeInsets.only(left: screenWidth * 0.03, bottom: 5),
+      child: Align(
+        alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
+        child: Text(
+          text,
+          style: const TextStyle(
+            color: Colors.grey,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String hintText,
+    required IconData icon,
+    required double screenWidth,
+    bool isPassword = false,
+  }) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.03),
+      child: TextFormField(
+        controller: controller,
+        cursorColor: Colors.grey,
+        obscureText: isPassword && !_isPasswordVisible,
+        textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+        textAlign: isArabic ? TextAlign.right : TextAlign.left,
+        decoration: InputDecoration(
+          hintText: hintText,
+          filled: true,
+          fillColor: Colors.grey[200],
+          prefixIcon: Icon(icon, color: Colors.grey),
+          suffixIcon:
+              isPassword
+                  ? IconButton(
+                    icon: Icon(
+                      _isPasswordVisible
+                          ? Icons.visibility
+                          : Icons.visibility_off,
+                      color: Colors.grey,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _isPasswordVisible = !_isPasswordVisible;
+                      });
+                    },
+                  )
+                  : null,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(screenWidth * 0.03),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
+    );
+  }
+}
+===== E:\arttherapy\lib\main.dart =====
+import 'package:arttherapy/update_profile.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive_flutter/adapters.dart';
+import 'cubit/Art_cubit.dart';
+import 'cubit/auth_cubit.dart';
+import 'hisrory.dart';
+import 'login.dart';
+import 'models/local_language.dart';
+import 'setting.dart';
+import 'signup.dart';
+import 'upload_file.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Hive.initFlutter();
+  await Hive.openBox('settings');
+  runApp(
+    MultiBlocProvider(
+      providers: [
+        BlocProvider(create: (context) => ArtCubit()),
+        BlocProvider(create: (context) => AuthCubit()),
+      ],
+      child: Directionality( textDirection: TextDirection.rtl,child: const MyApp()),
+    ),
+  );
+}
+
+class MyApp extends StatefulWidget {
+  const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  late Locale _locale;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedLanguage();
+  }
+
+  void _loadSavedLanguage() {
+    final box = Hive.box('settings');
+    String langCode = box.get('language', defaultValue: 'en');
+    setState(() {
+      _locale = Locale(langCode);
+    });
+  }
+
+  void _changeLanguage(String langCode) {
+    final box = Hive.box('settings');
+    box.put('language', langCode);
+    setState(() {
+      _locale = Locale(langCode);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection:
+          _locale.languageCode == 'ar' ? TextDirection.rtl : TextDirection.ltr,
+      child: MaterialApp(
+        locale: _locale,
+        supportedLocales: [
+          Locale('en', 'US'),
+          Locale('ar', 'EG'),
+        ],
+        localizationsDelegates: [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.white),
+          textSelectionTheme: const TextSelectionThemeData(
+            cursorColor: Color(0xff736253),
+          ),
+          visualDensity: VisualDensity.adaptivePlatformDensity,
+        ),
+        debugShowCheckedModeBanner: false,
+        home: LoginScreen(),
+        routes: {
+          "Login": (context) => LoginScreen(),
+          "Signup": (context) => SignUpScreen(),
+          "Setting":
+              (context) => SettingsScreen(
+                onLanguageChange: _changeLanguage,
+                currentLocale: _locale,
+              ),
+          "History": (context) => HistoryScreen(),
+          "upload": (context) => UploadFileScreen(),
+          "update": (context) => UpdateProfileScreen(),
+        },
+      ),
+    );
+  }
+}
+===== E:\arttherapy\lib\models\Art_model.dart =====
+class ArtPrediction {
+  final String? prediction;
+  final String? diagnosis;
+  final String? support;
+
+  ArtPrediction({
+    required this.prediction,
+    required this.diagnosis,
+    required this.support
+
+  });
+
+  factory ArtPrediction.fromJson(Map<String, dynamic> json) {
+    return ArtPrediction(
+      prediction: json['label'] ?? json['Ø§Ù„ØªØµÙ†ÙŠÙ_Ø§Ù„Ø¹Ø±Ø¨ÙŠ'] ?? 'Unknown',
+      diagnosis: json['diagnosis'] ?? json['Ø§Ù„ØªØ´Ø®ÙŠØµ'] ?? 'Unknown',
+      support: json['support'] ?? json['Ø§Ù„Ø¯Ø¹Ù…_Ø§Ù„Ù…Ù‚ØªØ±Ø­'] ?? 'Unknown',
+
+    );
+  }
+}
+===== E:\arttherapy\lib\models\local_language.dart =====
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+class AppLocalizations {
+  final Locale locale;
+
+  AppLocalizations(this.locale);
+
+  static AppLocalizations of(BuildContext context) {
+    return Localizations.of<AppLocalizations>(context, AppLocalizations)!;
+  }
+
+  static const LocalizationsDelegate<AppLocalizations> delegate = _AppLocalizationsDelegate();
+
+  Map<String, String> _localizedStrings = {};
+
+  Future<void> load() async {
+    String jsonString = await rootBundle.loadString('assets/lang/${locale.languageCode}.json');
+    Map<String, dynamic> jsonMap = json.decode(jsonString);
+
+    _localizedStrings = jsonMap.map((key, value) => MapEntry(key, value.toString()));
+  }
+
+  String translate(String key) {
+    return _localizedStrings[key] ?? key;
+  }
+}
+
+class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {
+  const _AppLocalizationsDelegate();
+
+  @override
+  bool isSupported(Locale locale) => ['en', 'ar'].contains(locale.languageCode);
+
+  @override
+  Future<AppLocalizations> load(Locale locale) async {
+    AppLocalizations localizations = AppLocalizations(locale);
+    await localizations.load();
+    return localizations;
+  }
+
+  @override
+  bool shouldReload(covariant LocalizationsDelegate old) => false;
+}
+===== E:\arttherapy\lib\models\result_model.dart =====
+class ResultModel {
+  final String? diseaseName;
+  final String imageUrl;
+  final String createdAt;
+
+  ResultModel({
+    required this.diseaseName,
+    required this.imageUrl,
+    required this.createdAt
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      "disease_name": diseaseName,
+      "image": imageUrl,
+      "createdAt":createdAt
+    };
+  }
+
+  factory ResultModel.fromJson(Map<String, dynamic> json) {
+    return ResultModel(
+      diseaseName: json['disease_name'],
+      imageUrl: json['image']?['secure_url'] ?? '',
+        createdAt:json['createdAt']
+    );
+  }
+}
+===== E:\arttherapy\lib\models\user_model.dart =====
+class UserModel {
+  String email;
+  String name;
+  String relation;
+  int age;
+  String? gender;
+
+  UserModel({
+    required this.age,
+    required this.relation,
+    required this.email,
+    required this.name,
+    required this.gender,
+  });
+  Map<String, dynamic> toJson() {
+    return {
+      "email": email,
+      "name": name,
+      "age": age,
+      "relation": relation,
+      "gender": gender ,
+    };
+  }
+
+  factory UserModel.fromJson(Map<String, dynamic> json) {
+    try {
+      return UserModel(
+        email: json['email'] ?? '',
+        name: json['name'] ?? '',
+        age: int.tryParse(json['age'].toString()) ?? 0,
+        relation: json['relation'] ?? '',
+        gender: json['gender'],
+      );
+    } catch (e) {
+      throw Exception("Error parsing user data: $e");
+    }
+  }
+
+
+}
+===== E:\arttherapy\lib\otp.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+import 'cubit/auth_cubit.dart';
+import 'cubit/auth_state.dart';
+import 'login.dart';
+
+class EnterOtpScreen extends StatefulWidget {
+  final String email;
+  const EnterOtpScreen({super.key, required this.email});
+
+  @override
+  State<EnterOtpScreen> createState() => _EnterOtpScreenState();
+}
+
+class _EnterOtpScreenState extends State<EnterOtpScreen> {
+  final List<TextEditingController> _otpControllers = List.generate(
+    4,
+    (_) => TextEditingController(),
+  );
+  @override
+  void dispose() {
+    for (var controller in _otpControllers) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocProvider(
+      create: (context) => AuthCubit(),
+      child: Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          backgroundColor: Colors.white,
+          elevation: 0,
+          toolbarHeight: 70,
+          centerTitle: true,
+          title: const Text(
+            'ENTER OTP',
+            style: TextStyle(
+              fontFamily: 'Poppins',
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+              color: Color(0xff22376c),
+            ),
+          ),
+        ),
+        backgroundColor: Colors.white,
+        body: BlocConsumer<AuthCubit, AuthStates>(
+          listener: (context, state) {
+            if (state is AuthSuccessState) {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (context) => LoginScreen()),
+              );
+            } else if (state is AuthErrorState) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text(state.error)));
+            }
+          },
+          builder: (context, state) {
+            return SafeArea(
+              child: Column(
+                children: [
+                  const SizedBox(height: 20),
+                  Text(
+                    'A 4-digit OTP has been sent to',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Color(0xff22376c),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 30),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: List.generate(4, (index) {
+                      return SizedBox(
+                        width: 50,
+                        child: TextField(
+                          controller: _otpControllers[index],
+                          keyboardType: TextInputType.text,
+                          textAlign: TextAlign.center,
+                          maxLength: 1,
+                          onChanged: (value) {
+                            if (value.isNotEmpty && index < 3) {
+                              FocusScope.of(context).nextFocus();
+                            } else if (value.isEmpty && index > 0) {
+                              FocusScope.of(context).previousFocus();
+                            }
+                          },
+                          decoration: InputDecoration(
+                            counterText: "",
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: Colors.grey),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(
+                                color: Color(0xff22376c),
+                              ),
+                            ),
+                            filled: true,
+                            fillColor: Colors.white,
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 30),
+                  MaterialButton(
+                    onPressed: () {
+                      String otp = _otpControllers.map((c) => c.text).join();
+                      context.read<AuthCubit>().verifyOtp(otp, widget.email);
+                    },
+                    color: const Color(0xff09122C),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    minWidth: 290,
+                    height: 50,
+                    child:
+                        state is AuthLoadingState
+                            ? CircularProgressIndicator(color: Colors.white)
+                            : Text(
+                              "Verify",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                              ),
+                            ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+===== E:\arttherapy\lib\rest_password.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'cubit/auth_cubit.dart';
+import 'cubit/auth_state.dart';
+import 'login.dart';
+import 'models/local_language.dart';
+
+class ResetPasswordScreen extends StatefulWidget {
+  const ResetPasswordScreen({super.key});
+
+  @override
+  State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
+}
+
+class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
+  final _emailController = TextEditingController();
+  final _newPasswordController = TextEditingController();
+  bool _isPasswordVisible = false;
+
+  @override
+  Widget build(BuildContext context) {
+    double screenWidth = MediaQuery.of(context).size.width;
+    double screenHeight = MediaQuery.of(context).size.height;
+    var lang = AppLocalizations.of(context);
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return BlocConsumer<AuthCubit, AuthStates>(
+      listener: (context, state) {
+        if (state is ForgetpassSuccessState) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+          );
+        }
+      },
+      builder: (context, state) {
+        return Directionality(
+          textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+          child: Scaffold(
+            body: Stack(
+              children: [
+                Container(
+                  width: double.infinity,
+                  height: double.infinity,
+                  decoration: const BoxDecoration(
+                    image: DecorationImage(
+                      image: AssetImage("assets/darker_blue_image.png"),
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: screenHeight * 0.12,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Image.asset(
+                      "assets/logo.png",
+                      width: screenWidth * 0.2,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: screenHeight * 0.3,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: screenWidth * 0.08,
+                    ),
+                    height: screenHeight * 0.7,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.only(
+                        topRight: Radius.circular(screenWidth * 0.15),
+                      ),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Padding(
+                          padding: EdgeInsets.only(bottom: screenHeight * 0.03),
+                          child: Text(
+                            lang.translate("Reset Password"),
+                            style: TextStyle(
+                              fontSize: 30,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xff09122C),
+                            ),
+                          ),
+                        ),
+
+                        // Email Input
+                        _buildLabel(
+                          lang.translate("Enter your email"),
+                          screenWidth,
+                        ),
+                        _buildTextField(
+                          hintText: lang.translate("*****@gmail.com"),
+                          icon: Icons.email,
+                          screenWidth: screenWidth,
+                          controller: _emailController,
+                        ),
+                        const SizedBox(height: 10),
+
+                        // Password Input
+                        _buildLabel(
+                          lang.translate("Enter new password"),
+                          screenWidth,
+                        ),
+                        _buildTextField(
+                          hintText: "******",
+                          icon: Icons.lock,
+                          screenWidth: screenWidth,
+                          isPassword: true,
+                          controller: _newPasswordController,
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Login Button
+                        SizedBox(
+                          width: double.infinity,
+                          height: screenHeight * 0.06,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Color(0xff09122C),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(
+                                  screenWidth * 0.03,
+                                ),
+                              ),
+                            ),
+                            onPressed: () {
+                              BlocProvider.of<AuthCubit>(context).resetPassword(
+                                email: _emailController.text,
+                                password: _newPasswordController.text,
+                                context: context,
+                              );
+                            },
+                            child: Text(
+                              lang.translate("Reset Password"),
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLabel(String text, double screenWidth) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return Padding(
+      padding: EdgeInsets.only(left: screenWidth * 0.03, bottom: 5),
+      child: Align(
+        alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
+        child: Text(
+          text,
+          style: const TextStyle(
+            color: Colors.grey,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String hintText,
+    required IconData icon,
+    required double screenWidth,
+    bool isPassword = false,
+  }) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.03),
+      child: TextFormField(
+        controller: controller,
+        cursorColor: Colors.grey,
+        obscureText: isPassword && !_isPasswordVisible,
+        decoration: InputDecoration(
+          hintText: hintText,
+          filled: true,
+          fillColor: Colors.grey[200],
+          prefixIcon: Icon(icon, color: Colors.grey),
+          suffixIcon:
+              isPassword
+                  ? IconButton(
+                    icon: Icon(
+                      _isPasswordVisible
+                          ? Icons.visibility
+                          : Icons.visibility_off,
+                      color: Colors.grey,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _isPasswordVisible = !_isPasswordVisible;
+                      });
+                    },
+                  )
+                  : null,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(screenWidth * 0.03),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
+    );
+  }
+}
+===== E:\arttherapy\lib\service.dart =====
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:hive/hive.dart';
+import 'package:http/http.dart' as http;
+import 'package:nb_utils/nb_utils.dart';
+import 'package:flutter/material.dart';
+import 'models/Art_model.dart';
+
+class ApiService {
+  Future<ArtPrediction?> fetchDataFromApi(File file) async {
+    if (!(await file.exists())) {
+      Fluttertoast.showToast(msg: "Error: File does not exist");
+      return null;
+    }
+
+    final box = Hive.box('settings');
+    String langCode = box.get('language', defaultValue: 'en');
+
+   final Uri url = Uri.parse(
+        langCode == 'ar'
+            ? "http://192.168.100.3:8000/predict_ar"
+            : "http://192.168.100.3:8000/predict"
+    );
+
+  /*  final Uri url = Uri.parse(langCode == 'ar'
+        ? "http://10.0.2.2:8000/predict_ar"
+        : "http://10.0.2.2:8000/predict");*/
+
+    try {
+      var request = http.MultipartRequest('POST', url)
+        ..files.add(await http.MultipartFile.fromPath('file', file.path))
+        ..headers.addAll({'Accept': 'application/json'});
+
+      var streamedResponse = await request.send().timeout(Duration(seconds: 60));
+
+      final responseBody = await streamedResponse.stream.bytesToString();
+
+      if (streamedResponse.statusCode == 200 && responseBody.isNotEmpty) {
+        final jsonData = json.decode(responseBody);
+        return ArtPrediction.fromJson(jsonData);
+      } else {
+        Fluttertoast.showToast(msg: "API Error: ${streamedResponse.statusCode}");
+        return null;
+      }
+    } catch (e) {
+      Fluttertoast.showToast(msg: "Request failed. Check connection.");
+      return null;
+    }
+  }
+}
+===== E:\arttherapy\lib\setting.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive/hive.dart';
+
+import 'cubit/auth_cubit.dart';
+import 'cubit/auth_state.dart';
+import 'models/local_language.dart';
+import 'upload_file.dart';
+
+class SettingsScreen extends StatefulWidget {
+  final Function(String) onLanguageChange;
+  final Locale currentLocale;
+
+  const SettingsScreen({
+    super.key,
+    required this.onLanguageChange,
+    required this.currentLocale,
+  });
+  @override
+  _SettingsScreenState createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  bool _hasFetched = false;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_hasFetched) {
+      context.read<AuthCubit>().fetchUserData();
+      _hasFetched = true;
+    }
+  }
+  @override
+  void initState() {
+    super.initState();
+     }
+
+  @override
+  Widget build(BuildContext context) {
+    double screenWidth = MediaQuery.of(context).size.width;
+    String currentLang = Localizations.localeOf(context).languageCode;
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    final authCubit = context.read<AuthCubit>();
+    return Directionality(
+      textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: BlocBuilder<AuthCubit, AuthStates>(
+          bloc: authCubit,
+          builder: (context, state) {
+            print("Current state: $state");
+            if (state is UserLoading) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 40.0),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }else if (state is UserUpdated) {
+              authCubit.fetchUserData();
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 40.0),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            else if (state is UserLoaded) {
+              return _buildProfileContent(currentLang, screenWidth, context);
+            } else if (state is UserError) {
+              return Center(child: Text(state.message));
+            }
+            return const Center(child: Text('Something went wrong'));
+          },
+        ),
+        bottomNavigationBar: _buildCustomBottomNavBar(
+          context,
+          activeTab: "settings",
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileContent(
+    String currentLang,
+    double screenWidth,
+    BuildContext context,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildBackButton(context),
+        _buildTitle(AppLocalizations.of(context).translate("settings")),
+        _buildDivider(),
+        _buildSectionTitle(AppLocalizations.of(context).translate("account")),
+        _buildAccountInfo(screenWidth),
+        _buildSectionTitle(AppLocalizations.of(context).translate("settings")),
+        _buildSettingItem(
+          Icons.language,
+          AppLocalizations.of(context).translate("language"),
+          currentLang == "en" ? "English" : "Ø§Ù„Ø¹Ø±Ø¨ÙŠØ©",
+          const Color(0xff09122C),
+          onTap: () {
+            String newLang = currentLang == "en" ? "ar" : "en";
+            widget.onLanguageChange(newLang);
+          },
+          screenWidth,
+        ),
+        _buildSettingItem(
+          Icons.help_outline,
+          AppLocalizations.of(context).translate("help"),
+          "",
+          const Color(0xff09122C),
+          screenWidth,
+        ),
+        _buildSettingItem(
+          Icons.logout,
+          AppLocalizations.of(context).translate("logout"),
+          "",
+          Colors.red,
+          screenWidth,
+          onTap: () {
+            Navigator.pushReplacementNamed(context, 'Login');
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBackButton(BuildContext context) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 16, top: 20),
+        child: IconButton(
+          icon: Icon(
+            isArabic ? Icons.arrow_forward : Icons.arrow_back,
+            color: Color(0xff09122C),
+          ),
+          iconSize: 30,
+          onPressed: () {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => UploadFileScreen()),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 24,
+          fontWeight: FontWeight.bold,
+          color: Color(0xff09122C),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDivider() {
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 16),
+      child: Divider(color: Colors.black26, thickness: 1),
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
+      child: Align(
+        alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
+        child: Text(
+          title,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Color(0xff09122C),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAccountInfo(double screenWidth) {
+    return BlocBuilder<AuthCubit, AuthStates>(
+      builder: (context, state) {
+        if (state is UserLoaded) {
+          final user = state.user;
+          return Padding(
+            padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.05),
+            child: Container(
+              padding: EdgeInsets.all(screenWidth * 0.04),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.black26),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: ListTile(
+                leading: Icon(Icons.person, size: screenWidth * 0.07),
+                title: Text(
+                  user.name,
+                  style: TextStyle(
+                    fontSize: screenWidth * 0.045,
+                    color: Color(0xff09122C),
+                  ),
+                ),
+                subtitle: Text(
+                  user.email,
+                  style: TextStyle(
+                    fontSize: screenWidth * 0.035,
+                    color: Color(0xff09122C),
+                  ),
+                ),
+                trailing: buildArrowIcon(Colors.black),
+                onTap: () async {
+                  final result = await Navigator.pushNamed(context, 'update');
+                  if (result == true && context.mounted) {
+                    context.read<AuthCubit>().fetchUserData();
+                  }
+                },
+              ),
+            ),
+          );
+        } else if (state is UserLoading) {
+          return Center(child: CircularProgressIndicator());
+        } else {
+          return Center(child: Text('No user data available'));
+        }
+      },
+    );
+  }
+
+  Widget _buildSettingItem(
+    IconData icon,
+    String title,
+    String subtitle,
+    Color color,
+    double screenWidth, {
+    VoidCallback? onTap,
+  }) {
+    String currentLang = widget.currentLocale.languageCode;
+    String displayLang = currentLang == "en" ? "English" : "Ø§Ù„Ø¹Ø±Ø¨ÙŠØ©";
+    return Padding(
+      padding: EdgeInsets.only(
+        left: screenWidth * .09,
+        right: screenWidth * .09,
+        bottom: screenWidth * .05,
+      ),
+      child: ListTile(
+        leading: Icon(icon, color: color, size: 30),
+        title: Text(
+          title,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        subtitle: Text(displayLang, style: const TextStyle(color: Colors.grey)),
+        trailing: buildArrowIcon(color),
+        onTap: onTap,
+      ),
+    );
+  }
+
+  Widget _buildCustomBottomNavBar(
+    BuildContext context, {
+    required String activeTab,
+  }) {
+    double screenWidth = MediaQuery.of(context).size.width;
+    double screenHeight = MediaQuery.of(context).size.height;
+
+    return Stack(
+      alignment: Alignment.topCenter,
+      children: [
+        Container(
+          height: screenHeight * 0.10,
+          decoration: const BoxDecoration(color: Color(0xff09122C)),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.1),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                CircleAvatar(
+                  backgroundColor:
+                      activeTab == "history"
+                          ? Colors.yellow
+                          : Color(0xff09122C),
+                  radius: screenWidth * .08,
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.bookmark,
+                      color:
+                          activeTab == "history"
+                              ? Color(0xff09122C)
+                              : Colors.grey,
+                      size: screenWidth * 0.07,
+                    ),
+                    onPressed: () {
+                      if (activeTab != "history") {
+                        Navigator.pushReplacementNamed(context, "History");
+                      }
+                    },
+                  ),
+                ),
+                CircleAvatar(
+                  backgroundColor:
+                      activeTab == "settings"
+                          ? Colors.yellow
+                          : Color(0xff09122C),
+                  radius: screenWidth * .08,
+
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.person,
+                      color:
+                          activeTab == "settings"
+                              ? Color(0xff09122C)
+                              : Colors.grey,
+                      size: screenWidth * 0.07,
+                    ),
+                    onPressed: () {
+                      if (activeTab != "settings") {
+                        Navigator.pushReplacementNamed(context, "Setting");
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget buildArrowIcon(Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        border: Border.all(color: color, width: 1.5),
+        borderRadius: BorderRadius.circular(20),
+        color: Colors.transparent,
+      ),
+      child: Icon(Icons.arrow_forward_outlined, color: color, size: 16),
+    );
+  }
+}
+===== E:\arttherapy\lib\signup.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'cubit/auth_cubit.dart';
+import 'cubit/auth_state.dart';
+import 'models/local_language.dart';
+import 'otp.dart';
+
+class SignUpScreen extends StatefulWidget {
+  const SignUpScreen({super.key});
+  @override
+  State<SignUpScreen> createState() => _SignUpScreenState();
+}
+
+class _SignUpScreenState extends State<SignUpScreen> {
+  final TextEditingController nameController = TextEditingController();
+  final TextEditingController emailController = TextEditingController();
+  final TextEditingController passwordController = TextEditingController();
+  bool _isPasswordVisible = false;
+  String? selectedRelation;
+  String? customRelation;
+  String? selectedAge;
+  String? selectedGender;
+  final _formKey = GlobalKey<FormState>();
+  @override
+  Widget build(BuildContext context) {
+    double screenWidth = MediaQuery.of(context).size.width;
+    double screenHeight = MediaQuery.of(context).size.height;
+    var lang = AppLocalizations.of(context);
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+
+    return BlocConsumer<AuthCubit, AuthStates>(
+      listener: (context, state) {
+        if (state is RegisterSuccessState) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder:
+                    (context) => EnterOtpScreen(email: emailController.text),
+              ),
+            );
+          });
+        }
+      },
+      builder: (context, state) {
+        return Directionality(
+          textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+          child: Scaffold(
+            resizeToAvoidBottomInset: true,
+            body: Stack(
+              children: [
+                Container(
+                  width: double.infinity,
+                  height: double.infinity,
+                  decoration: const BoxDecoration(
+                    image: DecorationImage(
+                      image: AssetImage("assets/darker_blue_image.png"),
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: screenHeight * 0.08,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: screenWidth * 0.08,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(screenWidth * 0.2),
+                      ),
+                    ),
+                    child: SafeArea(
+                      top: false,
+                      child: SingleChildScrollView(
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const SizedBox(height: 10),
+                              Text(
+                                lang.translate("Create new\nAccount"),
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  fontSize: 30,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xff09122C),
+                                ),
+                              ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    lang.translate("Already Registered?"),
+                                    style: TextStyle(
+                                      color: Colors.blueGrey[900],
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.pushNamed(context, "Login");
+                                    },
+                                    child: Text(
+                                      lang.translate("Log in here."),
+                                      style: TextStyle(
+                                        color: Colors.blueGrey[900],
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              _buildLabel(lang.translate("NAME"), screenWidth),
+                              _buildTextField(
+                                controller: nameController,
+                                hintText: lang.translate("Your Name"),
+                                icon: Icons.person,
+                                screenWidth: screenWidth,
+                                validator: (value) {
+                                  if (value == null || value.isEmpty) {
+                                    return lang.translate(
+                                      "Please enter your name.",
+                                    );
+                                  }
+                                  if (value.length < 6) {
+                                    return lang.translate(
+                                      "Name must be at least 6 characters.",
+                                    );
+                                  }
+                                  return null;
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              _buildLabel(lang.translate("EMAIL"), screenWidth),
+                              _buildTextField(
+                                controller: emailController,
+                                hintText: lang.translate("*****@gmail.com"),
+                                icon: Icons.email,
+                                screenWidth: screenWidth,
+                              ),
+                              const SizedBox(height: 10),
+                              _buildLabel(
+                                lang.translate("PASSWORD"),
+                                screenWidth,
+                              ),
+                              _buildTextField(
+                                controller: passwordController,
+                                hintText: "******",
+                                icon: Icons.lock,
+                                screenWidth: screenWidth,
+                                isPassword: true,
+                              ),
+                              _buildLabel(
+                                lang.translate(
+                                  "What is your relationship with the child?",
+                                ),
+                                screenWidth,
+                              ),
+                              DropdownButtonFormField<String>(
+                                value: selectedRelation,
+                                onChanged: (value) {
+                                  setState(() {
+                                    selectedRelation = value;
+                                    if (value != lang.translate('Other')) {
+                                      customRelation = null;
+                                    }
+                                  });
+                                },
+                                items:
+                                    [
+                                          lang.translate('Mother'),
+                                          lang.translate('Father'),
+                                          lang.translate('Brother'),
+                                          lang.translate('Teacher'),
+                                          lang.translate('Sister'),
+                                          lang.translate('Other'),
+                                        ]
+                                        .map(
+                                          (relation) => DropdownMenuItem(
+                                            value: relation,
+                                            child: Text(relation),
+                                          ),
+                                        )
+                                        .toList(),
+                                decoration: InputDecoration(
+                                  filled: true,
+                                  fillColor: Colors.grey[200],
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(
+                                      screenWidth * 0.03,
+                                    ),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                ),
+                              ),
+                              if (selectedRelation == lang.translate('Other'))
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 10.0),
+                                  child: TextFormField(
+                                    onChanged:
+                                        (value) => customRelation = value,
+                                    decoration: InputDecoration(
+                                      hintText: lang.translate(
+                                        'Please specify...',
+                                      ),
+                                      filled: true,
+                                      fillColor: Colors.grey[200],
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(
+                                          screenWidth * 0.03,
+                                        ),
+                                        borderSide: BorderSide.none,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              const SizedBox(height: 15),
+                              _buildLabel(lang.translate("Age"), screenWidth),
+                              DropdownButtonFormField<String>(
+                                value: selectedAge,
+                                onChanged:
+                                    (value) =>
+                                        setState(() => selectedAge = value),
+                                items:
+                                    List.generate(
+                                      7,
+                                      (index) => (6 + index).toString(),
+                                    ).map((age) {
+                                      return DropdownMenuItem(
+                                        value: age,
+                                        child: Text(age),
+                                      );
+                                    }).toList(),
+                                decoration: InputDecoration(
+                                  filled: true,
+                                  fillColor: Colors.grey[200],
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(
+                                      screenWidth * 0.03,
+                                    ),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 15),
+                              _buildLabel(
+                                lang.translate("gender"),
+                                screenWidth,
+                              ),
+                              DropdownButtonFormField<String>(
+                                value: selectedGender,
+                                onChanged:
+                                    (value) =>
+                                        setState(() => selectedGender = value),
+                                items:
+                                    [
+                                      lang.translate("male"),
+                                      lang.translate("female"),
+                                    ].map((gender) {
+                                      return DropdownMenuItem(
+                                        value: gender,
+                                        child: Text(gender),
+                                      );
+                                    }).toList(),
+                                decoration: InputDecoration(
+                                  filled: true,
+                                  fillColor: Colors.grey[200],
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(
+                                      screenWidth * 0.03,
+                                    ),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              SizedBox(
+                                width: double.infinity,
+                                height: screenHeight * 0.06,
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xff09122C),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(
+                                        screenWidth * 0.03,
+                                      ),
+                                    ),
+                                  ),
+                                  onPressed: () {
+                                    if (_formKey.currentState?.validate() ??
+                                        false) {
+                                      String email =
+                                          emailController.text
+                                              .trim()
+                                              .toLowerCase();
+                                      String name = nameController.text.trim();
+                                      String password =
+                                          passwordController.text.trim();
+                                      String finalRelation =
+                                          selectedRelation ==
+                                                  lang.translate('Other')
+                                              ? (customRelation?.trim() ?? '')
+                                              : (selectedRelation ?? '');
+                                      context.read<AuthCubit>().signup(
+                                        email: email,
+                                        password: password,
+                                        context: context,
+                                        confirmPassword: password,
+                                        name: name,
+                                        relation: finalRelation,
+                                        age: selectedAge ?? "",
+                                        gender: selectedGender??""
+                                      );
+                                    }
+                                  },
+                                  child: Text(
+                                    lang.translate("Sign Up"),
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 30),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLabel(String text, double screenWidth) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return Padding(
+      padding: EdgeInsets.only(left: screenWidth * 0.02, bottom: 5),
+      child: Align(
+        alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
+        child: Text(
+          text,
+          style: const TextStyle(
+            color: Colors.grey,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String hintText,
+    required IconData icon,
+    required double screenWidth,
+    bool isPassword = false,
+    String? Function(String?)? validator,
+  }) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextFormField(
+        validator: validator,
+        controller: controller,
+        cursorColor: Colors.grey,
+        obscureText: isPassword && !_isPasswordVisible,
+        textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+        textAlign: isArabic ? TextAlign.right : TextAlign.left,
+        decoration: InputDecoration(
+          hintText: hintText,
+          filled: true,
+          fillColor: Colors.grey[200],
+          prefixIcon: Icon(icon, color: Colors.grey),
+          suffixIcon:
+              isPassword
+                  ? IconButton(
+                    icon: Icon(
+                      _isPasswordVisible
+                          ? Icons.visibility
+                          : Icons.visibility_off,
+                      color: Colors.grey,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _isPasswordVisible = !_isPasswordVisible;
+                      });
+                    },
+                  )
+                  : null,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(screenWidth * 0.03),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
+    );
+  }
+}
+===== E:\arttherapy\lib\update_profile.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'cubit/auth_cubit.dart';
+import 'cubit/auth_state.dart';
+import 'models/local_language.dart';
+
+class UpdateProfileScreen extends StatefulWidget {
+  const UpdateProfileScreen({super.key});
+
+  @override
+  State<UpdateProfileScreen> createState() => _UpdateProfileScreenState();
+}
+
+class _UpdateProfileScreenState extends State<UpdateProfileScreen> {
+  final TextEditingController nameController = TextEditingController();
+  final TextEditingController emailController = TextEditingController();
+
+  bool _isPasswordVisible = false;
+  String? selectedRelation;
+  String? customRelation;
+  String? selectedAge;
+  String? selectedGender;
+
+  @override
+  void initState() {
+    super.initState();
+    context.read<AuthCubit>().fetchUserData();
+
+  }
+
+  String mapRelationToEnglish(String relation) {
+    switch (relation) {
+      case 'Ø£Ù…':
+      case 'Mother':
+        return 'Mother';
+      case 'Ø£Ø¨':
+      case 'Father':
+        return 'Father';
+      case 'Ø£Ø®':
+      case 'Brother':
+        return 'Brother';
+      case 'Ø£Ø®Øª':
+      case 'Sister':
+        return 'Sister';
+      case 'Ù…Ø¹Ù„Ù…':
+      case 'Teacher':
+        return 'Teacher';
+      default:
+        return customRelation ?? 'Other';
+    }
+  }
+
+
+  void _updateUser() {
+    if (selectedRelation == null || selectedAge == null ) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please complete all fields')),
+      );
+      return;
+    }
+
+    context.read<AuthCubit>().updateUserData(
+      name: nameController.text,
+      relation: mapRelationToEnglish(selectedRelation!),
+      age:  selectedAge!,
+
+    );
+  }
+  @override
+  void dispose() {
+    nameController.dispose();
+    super.dispose();
+  }
+  @override
+  Widget build(BuildContext context) {
+    double screenWidth = MediaQuery.of(context).size.width;
+    double screenHeight = MediaQuery.of(context).size.height;
+    var lang = AppLocalizations.of(context);
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    final authCubit = context.read<AuthCubit>();
+
+    return Directionality(
+      textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+      child: BlocListener<AuthCubit, AuthStates>(
+        listener: (context, state) {
+          if (state is UserUpdated) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Profile updated successfully')),
+            );
+            Navigator.pop(context, true); // Ø¨Ø¯Ù„ pushReplacement
+
+          } else if (state is UserError) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(state.message)),
+            );
+          }
+        },
+        child: BlocBuilder<AuthCubit, AuthStates>(
+          buildWhen: (previous, current) => current is UserLoaded,
+          bloc: authCubit,
+          builder: (context, state) {
+            if (state is UserLoading) {
+              return const Center(child: CircularProgressIndicator());
+            } else if (state is UserError) {
+              return Center(child: Text(state.message));
+            } else if (state is UserLoaded) {
+              if (nameController.text.isEmpty) {
+                nameController.text = state.user.name;
+                emailController.text = state.user.email;
+                selectedAge = state.user.age.toString();
+                final allRelations = [
+                  'Mother',
+                  'Father',
+                  'Brother',
+                  'Sister',
+                  'Teacher',
+                  'Other',
+                ];
+
+                if (allRelations.contains(state.user.relation)) {
+                  selectedRelation = isArabic
+                      ? lang.translate(state.user.relation)
+                      : state.user.relation;
+                } else {
+                  selectedRelation = lang.translate('Other');
+                  customRelation = state.user.relation;
+                }
+
+              }}
+            return Scaffold(
+              resizeToAvoidBottomInset: true,
+              body: Stack(
+                children: [
+                  Container(
+                    width: double.infinity,
+                    height: double.infinity,
+                    decoration: const BoxDecoration(
+                      image: DecorationImage(
+                        image: AssetImage("assets/darker_blue_image.png"),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: screenHeight * 0.15,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: screenWidth * 0.08,
+                      ),
+                      height: screenHeight * 0.90,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(screenWidth * 0.2),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const SizedBox(height: 20),
+                          Text(
+                            lang.translate("Update Profile"),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 30,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xff09122C),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          _buildLabel(lang.translate("NAME"), screenWidth),
+                          _buildTextField(
+                            controller: nameController,
+                            hintText: lang.translate("Your Name"),
+                            icon: Icons.person,
+                            screenWidth: screenWidth,
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return lang.translate(
+                                  "Please enter your name.",
+                                );
+                              }
+                              if (value.length < 6) {
+                                return lang.translate(
+                                  "Name must be at least 6 characters.",
+                                );
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 15),
+                          _buildLabel(lang.translate("EMAIL"), screenWidth),
+                          _buildTextField(
+                            controller: emailController,
+                            hintText: lang.translate("*****@gmail.com"),
+                            icon: Icons.email,
+                            screenWidth: screenWidth,
+                            isPassword: false,
+                            readOnly: true
+                          ),
+                          const SizedBox(height: 15),
+                          _buildLabel(
+                            lang.translate("What is your relationship with the child?"),
+                            screenWidth,
+                          ),
+                          DropdownButtonFormField<String>(
+                            value: selectedRelation,
+                            onChanged: (value) {
+                              setState(() {
+                                selectedRelation = value;
+                                if (value != lang.translate('Other')) {
+                                  customRelation = null;
+                                }
+                              });
+                            },
+                            items: [
+                              lang.translate('Mother'),
+                              lang.translate('Father'),
+                              lang.translate('Brother'),
+                              lang.translate('Teacher'),
+                              lang.translate('Sister'),
+                              lang.translate('Other'),
+                            ]
+                                .map(
+                                  (relation) => DropdownMenuItem(
+                                value: relation,
+                                child: Text(relation),
+                              ),
+                            )
+                                .toList(),
+                            decoration: InputDecoration(
+                              filled: true,
+                              fillColor: Colors.grey[200],
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(
+                                  screenWidth * 0.03,
+                                ),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                          ),
+                          if (selectedRelation == lang.translate('Other'))
+                            Padding(
+                              padding: const EdgeInsets.only(top: 10.0),
+                              child: TextFormField(
+                                onChanged: (value) => customRelation = value,
+                                decoration: InputDecoration(
+                                  hintText: lang.translate('Please specify...'),
+                                  filled: true,
+                                  fillColor: Colors.grey[200],
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(
+                                      screenWidth * 0.03,
+                                    ),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 15),
+                          _buildLabel(lang.translate("Age"), screenWidth),
+                          DropdownButtonFormField<String>(
+                            value: selectedAge,
+                            onChanged: (value) => setState(() => selectedAge = value),
+                            items: List.generate(
+                              7,
+                                  (index) => (6 + index).toString(),
+                            ).map((age) {
+                              return DropdownMenuItem(
+                                value: age,
+                                child: Text(age),
+                              );
+                            }).toList(),
+                            decoration: InputDecoration(
+                              filled: true,
+                              fillColor: Colors.grey[200],
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(
+                                  screenWidth * 0.03,
+                                ),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 15),
+                          _buildLabel(lang.translate("gender"), screenWidth),
+                          DropdownButtonFormField<String>(
+                            value: selectedGender,
+                            onChanged: (value) => setState(() => selectedGender = value),
+                            items: [
+                              lang.translate("male"),
+                              lang.translate("female"),
+                            ].map((gender) {
+                              return DropdownMenuItem(
+                                value: gender,
+                                child: Text(gender),
+                              );
+                            }).toList(),
+                            decoration: InputDecoration(
+                              filled: true,
+                              fillColor: Colors.grey[200],
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(
+                                  screenWidth * 0.03,
+                                ),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 30),
+                          SizedBox(
+                            width: double.infinity,
+                            height: screenHeight * 0.06,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Color(0xff09122C),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    screenWidth * 0.03,
+                                  ),
+                                ),
+                              ),
+                              onPressed: _updateUser,
+                              child: Text(
+                                lang.translate("Save Changes"),
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLabel(String text, double screenWidth) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return Padding(
+      padding: EdgeInsets.only(left: screenWidth * 0.02, bottom: 5),
+      child: Align(
+        alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
+        child: Text(
+          text,
+          style: const TextStyle(
+            color: Colors.grey,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String hintText,
+    required IconData icon,
+    required double screenWidth,
+    bool isPassword = false,
+    bool readOnly = false,
+    String? Function(String?)? validator,
+  }) {
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return Padding(
+      padding: EdgeInsets.only(bottom: 10),
+      child: TextFormField(
+        controller: controller,
+        validator: validator,
+        cursorColor: Colors.grey,
+        obscureText: isPassword && !_isPasswordVisible,
+        textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+        textAlign: isArabic ? TextAlign.right : TextAlign.left,
+        readOnly: readOnly,
+        onChanged: (text) {
+          setState(() {
+            controller.text = text;
+          });
+        },
+        decoration: InputDecoration(
+          hintText: hintText,
+          filled: true,
+          fillColor: Colors.grey[200],
+          prefixIcon: Icon(icon, color: Colors.grey),
+          suffixIcon: isPassword
+              ? IconButton(
+            icon: Icon(
+              _isPasswordVisible
+                  ? Icons.visibility
+                  : Icons.visibility_off,
+              color: Colors.grey,
+            ),
+            onPressed: () {
+              setState(() {
+                _isPasswordVisible = !_isPasswordVisible;
+              });
+            },
+          )
+              : null,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(screenWidth * 0.03),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
+    );
+  }
+}
+===== E:\arttherapy\lib\upload_file.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'cubit/Art_cubit.dart';
+import 'cubit/Art_state.dart';
+import 'cubit/auth_cubit.dart';
+import 'models/local_language.dart';
+
+class UploadFileScreen extends StatefulWidget {
+  const UploadFileScreen({super.key});
+
+  @override
+  _UploadFileScreenState createState() => _UploadFileScreenState();
+}
+
+class _UploadFileScreenState extends State<UploadFileScreen> {
+  File? _selectedFile;
+  static const double imageContainerHeightFactor = 0.25;
+  bool isSaved = false;
+
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  void _showResultSheet(
+      BuildContext context,
+      String prediction,
+      String diagnosis,
+      String support,
+      File imageFile,
+      String userId,
+      ) {
+    double screenHeight = MediaQuery.of(context).size.height;
+    var lang = AppLocalizations.of(context);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      backgroundColor: Color(0xff09122C),
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  GestureDetector(
+                    onTap: ()  {
+                      try {
+                        context.read<AuthCubit>().saveResult(
+                          diseaseName: prediction,
+                          profilePicture: imageFile,
+                        );
+
+                        setState(() {
+                          isSaved = true;
+                        });
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(lang.translate("Saved to history!")),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      } catch (e) {
+                        print("âŒ Failed to save: $e");
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(lang.translate("Failed to save!")),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                    },
+                    child:  Icon(Icons.bookmark, color:  isSaved ? Colors.yellow :Colors.white),
+                  ),
+                  Text(
+                    lang.translate("RESULT"),
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: const Icon(Icons.close, color: Colors.white),
+                  ),
+                ],
+              ),
+              SizedBox(height: screenHeight * 0.02),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.file(
+                  imageFile,
+                  width: double.infinity,
+                  height: screenHeight * 0.2,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              SizedBox(height: screenHeight * 0.02),
+              Text(
+                prediction,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              SizedBox(height: screenHeight * 0.02),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  Text(
+                    lang.translate("diagnosis"),
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  Text(
+                    diagnosis,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: screenHeight * 0.02),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+
+                children: [
+                  Text(
+                    lang.translate( "support"),
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  Text(
+                    support,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    double screenHeight = MediaQuery.of(context).size.height;
+    var lang = AppLocalizations.of(context);
+    var currentLocale = Localizations.localeOf(context);
+    bool isArabic = currentLocale.languageCode == 'ar';
+    return Directionality(
+      textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(height: screenHeight * 0.05),
+              Image.asset('assets/logo.png', height: screenHeight * 0.05),
+              const Divider(color: Colors.black26, thickness: 1.5),
+              SizedBox(height: screenHeight * 0.05),
+              Text(
+                lang.translate("Upload Files"),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: screenHeight * 0.02),
+              BlocBuilder<ArtCubit, ArtTherapyState>(
+                builder: (context, state) {
+                  return GestureDetector(
+                    onTap:
+                        () => showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          shape: const RoundedRectangleBorder(
+                            borderRadius: BorderRadius.vertical(
+                              top: Radius.circular(20),
+                            ),
+                          ),
+                          backgroundColor: Colors.white,
+                          builder: (context) {
+                            return Padding(
+                              padding: EdgeInsets.all(20.0),
+                              child: SizedBox(
+                                width: MediaQuery.of(context).size.width,
+                                height: 80,
+                                child: Wrap(
+                                  children: [
+                                    ListTile(
+                                      onTap: () async {
+                                        final XFile? photo = await ImagePicker()
+                                            .pickImage(
+                                              source: ImageSource.camera,
+                                            );
+
+                                        if (photo != null) {
+                                          setState(() {
+                                            _selectedFile = File(photo.path);
+                                          });
+                                        }
+                                        Navigator.pop(context);
+                                      },
+                                      leading: const Icon(Icons.camera_alt),
+                                      title: Text(
+                                        lang.translate("Take a photo"),
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xff3C3D37),
+                                        ),
+                                      ),
+                                    ),
+                                    SizedBox(width: 50),
+
+                                    ListTile(
+                                      onTap: () async {
+                                        final XFile? photo = await ImagePicker()
+                                            .pickImage(
+                                              source: ImageSource.gallery,
+                                              maxWidth: 800,
+                                              maxHeight: 800,
+                                              imageQuality: 70,
+                                            );
+
+                                        if (photo != null) {
+                                          setState(() {
+                                            _selectedFile = File(photo.path);
+                                          });
+                                        }
+                                        Navigator.pop(context);
+                                      },
+                                      leading: const Icon(Icons.image),
+                                      title: Text(
+                                        lang.translate("Choose from gallery"),
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xff3C3D37),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                    child: Container(
+                      width: MediaQuery.of(context).size.width * .80,
+                      height: screenHeight * imageContainerHeightFactor,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey, width: 1.5),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child:
+                          _selectedFile == null
+                              ? Semantics(
+                                label: lang.translate(
+                                  "Drag or Click to choose an Image",
+                                ),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.cloud_upload,
+                                      size: 40,
+                                      color: Colors.grey,
+                                    ),
+                                    SizedBox(height: 10),
+                                    Text(
+                                      lang.translate(
+                                        "Drag or Click to choose an Image",
+                                      ),
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                              : Stack(
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(19),
+
+                                    child: Image.file(
+                                      _selectedFile!,
+                                      fit: BoxFit.cover,
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                    ),
+                                  ),
+                                  Positioned(
+                                    top: 0,
+                                    right: 0,
+                                    child: GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          _selectedFile = null;
+                                        });
+                                        BlocProvider.of<ArtCubit>(
+                                          context,
+                                        ).emit(ArtTherapyInitial());
+                                      },
+                                      child: CircleAvatar(
+                                        backgroundColor: Colors.red,
+                                        radius: 16,
+                                        child: Icon(
+                                          Icons.delete,
+                                          color: Colors.white,
+                                          size: 18,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                    ),
+                  );
+                },
+              ),
+              SizedBox(height: screenHeight * 0.03),
+              ElevatedButton(
+                onPressed: () {
+                  if (_selectedFile != null) {
+                    BlocProvider.of<ArtCubit>(context).Art(_selectedFile!);
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Color(0xff09122C),
+                  padding: EdgeInsets.symmetric(vertical: 15, horizontal: 40),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                child: Text(
+                  lang.translate("RESULT"),
+                  style: TextStyle(fontSize: 16, color: Colors.white),
+                ),
+              ),
+              SizedBox(height: screenHeight * 0.03),
+              BlocListener<ArtCubit, ArtTherapyState>(
+                listener: (context, state) {
+
+                  if (state is ArtTherapySuccess) {
+                    _showResultSheet(
+                      context,
+                      state.prediction.prediction ?? 'Unknown',
+                      state.prediction.diagnosis?? 'Unknown',
+                      state.prediction.support?? 'Unknown',
+                      _selectedFile!,
+                      "",
+                    );
+                  } else if (state is ArtTherapyError) {
+                    _showResultSheet(
+                      context,
+                      'Error',
+                        'Error',
+                        'Error',
+                      _selectedFile!,""
+                    );
+                  }
+                },
+                child: Container(),
+              ),
+            ],
+          ),
+        ),
+
+        bottomNavigationBar: _buildCustomBottomNavBar(context, activeTab: ""),
+      ),
+    );
+  }
+
+  Widget _buildCustomBottomNavBar(
+    BuildContext context, {
+    required String activeTab,
+  }) {
+    double screenWidth = MediaQuery.of(context).size.width;
+    double screenHeight = MediaQuery.of(context).size.height;
+
+    return Stack(
+      alignment: Alignment.topCenter,
+      children: [
+        Container(
+          height: screenHeight * 0.10,
+          decoration: const BoxDecoration(color: Color(0xff09122C)),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.1),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                CircleAvatar(
+                  backgroundColor:
+                      activeTab == "history"
+                          ? Colors.yellow
+                          : Color(0xff09122C),
+                  radius: screenWidth * .08,
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.bookmark,
+                      color:
+                          activeTab == "history"
+                              ? Color(0xff09122C)
+                              : Colors.grey,
+                      size: screenWidth * 0.07,
+                    ),
+                    onPressed: () {
+                      if (activeTab != "history") {
+                        Navigator.pushReplacementNamed(context, "History");
+                      }
+                    },
+                  ),
+                ),
+                CircleAvatar(
+                  backgroundColor:
+                      activeTab == "settings"
+                          ? Colors.yellow
+                          : Color(0xff09122C),
+                  radius: screenWidth * .08,
+
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.person,
+                      color:
+                          activeTab == "settings"
+                              ? Color(0xff09122C)
+                              : Colors.grey,
+                      size: screenWidth * 0.07,
+                    ),
+                    onPressed: () {
+                      if (activeTab != "settings") {
+                        Navigator.pushReplacementNamed(context, "Setting");
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+===== pubspec.yaml =====
+
+name: arttherapy
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.0-171.0.dev
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: ^0.20.2
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  cupertino_icons: ^1.0.8
+  file_picker:
+  image_picker:
+  analyzer:
+  bloc: ^9.0.0
+  flutter_bloc: ^9.1.0
+  http:
+  uuid:
+  nb_utils: ^7.1.3
+  image:
+  flutter_image_compress:
+dev_dependencies:
+  hive_generator: ^2.0.0
+  build_runner: ^2.4.7
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/darker_blue_image.png
+    - assets/darker_image.png
+    - assets/logo.png
+    - assets/lang/en.json
+    - assets/lang/ar.json
